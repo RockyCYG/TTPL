@@ -1,19 +1,15 @@
-from . import (
-    funsearch,
-    hillclimb,
-    randsample,
-    eoh,
-)
-
-# try to import reevo
-try:
-    from . import reevo
-except ImportError:
-    pass
-
 import os
 import inspect
 import importlib
+
+
+for _module_name in ("funsearch", "hillclimb", "randsample", "eoh", "reevo"):
+    try:
+        globals()[_module_name] = importlib.import_module(
+            f"{__name__}.{_module_name}"
+        )
+    except ImportError:
+        pass
 
 
 def import_all_method_classes_from_subfolders(root_directory: str):
@@ -39,14 +35,22 @@ def import_all_method_classes_from_subfolders(root_directory: str):
                 module_name = f'{__name__}.{subdir}.{subdir}'
 
                 # Dynamically import the module
-                module = importlib.import_module(module_name)
+                try:
+                    module = importlib.import_module(module_name)
+                except ImportError:
+                    continue
 
                 # Import all classes from the module
                 for attribute_name in dir(module):
                     attribute = getattr(module, attribute_name)
                     if isinstance(attribute, type):  # Only import class objects
                         # Use inspect to check if the class is defined in the current module
-                        if inspect.getmodule(attribute).__file__ == module.__file__:
+                        attribute_module = inspect.getmodule(attribute)
+                        if (
+                            attribute_module is not None
+                            and getattr(attribute_module, "__file__", None)
+                            == module.__file__
+                        ):
                             globals()[attribute_name] = attribute  # Add the class to the global namespace
                             # print(f'Imported class {attribute_name} from {module_name}')
 
@@ -56,13 +60,21 @@ def import_all_method_classes_from_subfolders(root_directory: str):
                 module_name = f'{__name__}.{subdir}.{profiler_name}'
 
                 # Dynamically import the module
-                module = importlib.import_module(module_name)
+                try:
+                    module = importlib.import_module(module_name)
+                except ImportError:
+                    continue
 
                 # Import all classes from the module
                 for attribute_name in dir(module):
                     attribute = getattr(module, attribute_name)
                     if isinstance(attribute, type):  # Only import class objects
                         # Use inspect to check if the class is defined in the current module
-                        if inspect.getmodule(attribute).__file__ == module.__file__:
+                        attribute_module = inspect.getmodule(attribute)
+                        if (
+                            attribute_module is not None
+                            and getattr(attribute_module, "__file__", None)
+                            == module.__file__
+                        ):
                             globals()[attribute_name] = attribute  # Add the class to the global namespace
                             # print(f'Imported class {attribute_name} from {module_name}')

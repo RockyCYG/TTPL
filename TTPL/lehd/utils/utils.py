@@ -32,13 +32,12 @@ import shutil
 import sys
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
-import matplotlib.pyplot as plt
 import numpy as np
-import pytz
 import torch
 
-process_start_time = datetime.now(pytz.timezone("Asia/Seoul"))
+process_start_time = datetime.now(ZoneInfo("Asia/Seoul"))
 b = os.path.abspath('.')
 result_folder = b+'/result/' + process_start_time.strftime("%Y%m%d_%H%M%S") + '{desc}'
 
@@ -238,6 +237,11 @@ def util_print_log_array(logger, result_log: LogData):
         logger.info('{} = {}'.format(key+'_list', result_log.get(key)))
 
 
+def _get_matplotlib_pyplot():
+    import matplotlib.pyplot as plt
+    return plt
+
+
 def util_save_log_image_with_label(result_file_prefix,
                                    img_params,
                                    result_log: LogData,
@@ -246,7 +250,7 @@ def util_save_log_image_with_label(result_file_prefix,
     if not os.path.exists(dirname):
         os.makedirs(dirname)
 
-    _build_log_image_plt(img_params, result_log, labels)
+    plt = _build_log_image_plt(img_params, result_log, labels)
 
     if labels is None:
         labels = result_log.get_keys()
@@ -260,6 +264,7 @@ def _build_log_image_plt(img_params,
                          result_log: LogData,
                          labels=None):
     assert type(result_log) == LogData, 'use LogData Class for result_log.'
+    plt = _get_matplotlib_pyplot()
 
     # Read json
     folder_name = img_params['json_foldername']
@@ -296,6 +301,7 @@ def _build_log_image_plt(img_params,
     plt.rc('legend', **{'fontsize': 18})
     plt.legend()
     plt.grid(config["grid"])
+    return plt
 
 
 def copy_all_src(dst_root):

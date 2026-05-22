@@ -1,7 +1,6 @@
 import os
 from dataclasses import dataclass
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 

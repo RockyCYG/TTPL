@@ -36,6 +36,58 @@ task_description_tsp = """
                     and you must keep the 'all_coors' be a tensor with the same shape as 'coor1'. Avoid use 'for' to deal with batch"""
 
 
+# POMO TSP Logit-Bias Template
+template_program_tsp_logit_bias = '''
+import torch
+
+def make_logit_bias(coords: torch.Tensor, current_node: torch.Tensor, ninf_mask: torch.Tensor, step: int) -> torch.Tensor:
+    """
+    Args:
+        coords: normalized coordinates of all nodes, shape: (batch, problem, 2)
+        current_node: current node index for each POMO rollout, shape: (batch, pomo)
+        ninf_mask: visited-node mask, shape: (batch, pomo, problem). Visited nodes are -inf.
+        step: current decoding step, starting from 1 after the first fixed POMO move.
+
+    Return:
+        bias: additive decoder score bias, shape: (batch, pomo, problem)
+
+    # This is a template function. It implements the fixed log-distance prior:
+    # nearest topK candidates use -log(distance), while the rest use -distance.
+    # You can develop a better inference-time bias based on distance, mask, step,
+    # problem size, and smooth scaling, but keep the output shape unchanged.
+    batch_size, problem_size, _ = coords.shape
+    pomo_size = current_node.shape[1]
+    gather_index = current_node[:, :, None].expand(batch_size, pomo_size, 2)
+    current_xy = coords.gather(dim=1, index=gather_index)
+    dist = torch.cdist(current_xy, coords).clamp_min(1e-6)
+    valid_mask = ninf_mask == 0
+
+    topk = min(20, problem_size)
+    ranked_dist = dist.masked_fill(~valid_mask, float("inf"))
+    topk_index = torch.topk(ranked_dist, k=topk, dim=2, largest=False).indices
+    topk_mask = torch.zeros_like(valid_mask, dtype=torch.bool)
+    topk_mask.scatter_(dim=2, index=topk_index, value=True)
+
+    near_bias = -torch.log(dist)
+    far_bias = -dist
+    bias = torch.where(topk_mask, near_bias, far_bias)
+    bias = bias.masked_fill(~valid_mask, 0.0)
+    bias = torch.where(torch.isfinite(bias), bias, torch.zeros_like(bias))
+    bias = 0.1 * bias
+    """
+    return bias
+'''
+
+task_description_tsp_logit_bias = """
+                    I need help designing an inference-time additive logit-bias function for a POMO-style TSP decoder.
+                    The function is implemented in PyTorch and receives normalized full-graph coordinates, the current
+                    node of each POMO rollout, the visited-node mask, and the decoding step. It must return a tensor with
+                    shape (batch, pomo, problem) that will be added to decoder scores before tanh clipping and masking.
+                    Good solutions should use geometric information such as current-to-candidate distance, nearest-neighbor
+                    structure, decoding step, and problem size, while avoiding Python loops over the batch or rollout axes.
+                    The goal is to maximize final negative gap, so lower TSP tour gap is better."""
+
+
 # CVRP Template
 template_program_cvrp = '''
 import torch
@@ -87,6 +139,8 @@ def get_template_and_description(problem_type: str):
     problem_type = problem_type.lower()
     if problem_type == "tsp":
         return template_program_tsp, task_description_tsp
+    elif problem_type in ("tsp_logit_bias", "tsp_bias"):
+        return template_program_tsp_logit_bias, task_description_tsp_logit_bias
     elif problem_type == "cvrp":
         return template_program_cvrp, task_description_cvrp
     else:

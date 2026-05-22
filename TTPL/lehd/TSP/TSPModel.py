@@ -1,380 +1,376 @@
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
 class TSPModel(nn.Module):
-    """
-    The main model for the Traveling Salesperson Problem.
-    It consists of an encoder and a decoder.
-    """
 
     def __init__(self, **model_params):
         super().__init__()
         self.model_params = model_params
-        self.mode = model_params["mode"]
+        self.use_polynet = model_params.get('use_polynet', False)
+
         self.encoder = TSP_Encoder(**model_params)
         self.decoder = TSP_Decoder(**model_params)
         self.encoded_nodes = None
+        # shape: (batch, problem, EMBEDDING_DIM)
 
-    def forward(
-        self, state, selected_node_list, solution, current_step, **kwargs
-    ):
-        """
-        Forward pass of the model.
-
-        Args:
-            state: The current state of the environment.
-            selected_node_list: The list of already selected nodes.
-            solution: The ground truth solution (for training).
-            current_step: The current step in the decoding process.
-            repair: A boolean indicating if the model is in repair mode.
-
-        Returns:
-            A tuple containing the selected teacher node, probability, and selected student node.
-        """
-        batch_size_V = state.data.size(0)
-
-        if self.mode == "train":
-            probs = self.decoder(self.encoder(state.data), selected_node_list)
-            selected_student = probs.argmax(dim=1)
-            selected_teacher = solution[:, current_step - 1]
-            prob = probs[
-                torch.arange(batch_size_V)[:, None], selected_teacher[:, None]
-            ].reshape(batch_size_V, 1)
-        else:  # test mode
-            probs = self.decoder(
-                self.encoder,
-                state.data,
-                selected_node_list,
-                **kwargs,
+    def pre_forward(self, reset_state, z=None):
+        self.encoded_nodes = self.encoder(reset_state.problems)
+        # shape: (batch, problem, EMBEDDING_DIM)
+        if self.use_polynet and z is None:
+            batch_size = reset_state.problems.size(0)
+            rollout_size = reset_state.problems.size(1)
+            z_dim = self.model_params['z_dim']
+            z = torch.zeros(
+                size=(batch_size, rollout_size, z_dim),
+                device=reset_state.problems.device,
             )
-            selected_student = probs.argmax(dim=1)
-            selected_teacher = selected_student
-            prob = 1
+        self.decoder.set_kv(self.encoded_nodes, z)
 
-        return selected_teacher, prob, 1, selected_student
+    def forward(self, state, logit_bias=None):
+        batch_size = state.BATCH_IDX.size(0)
+        pomo_size = state.BATCH_IDX.size(1)
+
+        if state.current_node is None:
+            device = self.encoded_nodes.device
+            selected = torch.arange(pomo_size, device=device)[None, :].expand(batch_size, pomo_size)
+            prob = torch.ones(size=(batch_size, pomo_size), device=device)
+
+            encoded_first_node = _get_encoding(self.encoded_nodes, selected)
+            # shape: (batch, pomo, embedding)
+            self.decoder.set_q1(encoded_first_node)
+
+        else:
+            encoded_last_node = _get_encoding(self.encoded_nodes, state.current_node)
+            # shape: (batch, pomo, embedding)
+            probs = self.decoder(
+                encoded_last_node,
+                ninf_mask=state.ninf_mask,
+                logit_bias=logit_bias,
+            )
+            # shape: (batch, pomo, problem)
+
+            if self.training or self.model_params['eval_type'] == 'softmax':
+                while True:
+                    selected = probs.reshape(batch_size * pomo_size, -1).multinomial(1) \
+                        .squeeze(dim=1).reshape(batch_size, pomo_size)
+                    # shape: (batch, pomo)
+
+                    prob = probs[state.BATCH_IDX, state.POMO_IDX, selected] \
+                        .reshape(batch_size, pomo_size)
+                    # shape: (batch, pomo)
+
+                    if (prob != 0).all():
+                        break
+
+            else:
+                selected = probs.argmax(dim=2)
+                # shape: (batch, pomo)
+                prob = None
+
+
+        return selected, prob
+
+
+def _get_encoding(encoded_nodes, node_index_to_pick):
+    # encoded_nodes.shape: (batch, problem, embedding)
+    # node_index_to_pick.shape: (batch, pomo)
+
+    batch_size = node_index_to_pick.size(0)
+    pomo_size = node_index_to_pick.size(1)
+    embedding_dim = encoded_nodes.size(2)
+
+    gathering_index = node_index_to_pick[:, :, None].expand(batch_size, pomo_size, embedding_dim)
+    # shape: (batch, pomo, embedding)
+
+    picked_nodes = encoded_nodes.gather(dim=1, index=gathering_index)
+    # shape: (batch, pomo, embedding)
+
+    return picked_nodes
 
 
 ########################################
 # ENCODER
 ########################################
-class TSP_Encoder(nn.Module):
-    """
-    The encoder for the TSP model.
-    It uses a linear embedding layer followed by multiple encoder layers.
-    """
 
+class TSP_Encoder(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
         self.model_params = model_params
-        embedding_dim = self.model_params["embedding_dim"]
-        encoder_layer_num = 1
-        self.embedding = nn.Linear(2, embedding_dim, bias=True)
-        self.layers = nn.ModuleList(
-            [EncoderLayer(**model_params) for _ in range(encoder_layer_num)]
-        )
+        embedding_dim = self.model_params['embedding_dim']
+        encoder_layer_num = self.model_params['encoder_layer_num']
+
+        self.embedding = nn.Linear(2, embedding_dim)
+        self.layers = nn.ModuleList([EncoderLayer(**model_params) for _ in range(encoder_layer_num)])
 
     def forward(self, data):
-        """
-        Forward pass of the encoder.
+        # data.shape: (batch, problem, 2)
 
-        Args:
-            data: The input data (node coordinates).
-
-        Returns:
-            The encoded node embeddings.
-        """
         embedded_input = self.embedding(data)
+        # shape: (batch, problem, embedding)
+
         out = embedded_input
         for layer in self.layers:
             out = layer(out)
+
         return out
 
 
-class TSP_Decoder(nn.Module):
-    """
-    The decoder for the TSP model.
-    It generates the solution sequence node by node.
-    """
-
-    def __init__(self, **model_params):
-        super().__init__()
-        self.model_params = model_params
-        embedding_dim = self.model_params["embedding_dim"]
-        encoder_layer_num = self.model_params["decoder_layer_num"]
-
-        self.embedding_first_node = nn.Linear(embedding_dim, embedding_dim, bias=True)
-        self.embedding_last_node = nn.Linear(embedding_dim, embedding_dim, bias=True)
-
-        self.layers = nn.ModuleList(
-            [DecoderLayer(**model_params) for _ in range(encoder_layer_num)]
-        )
-
-        self.k_1 = nn.Linear(embedding_dim, embedding_dim, bias=True)
-        self.Linear_final = nn.Linear(embedding_dim, 1, bias=True)
-
-    def _get_new_data(self, data, selected_node_list, prob_size, B_V):
-        """
-        Get the data for the unselected nodes.
-        """
-        list = selected_node_list
-        new_list = torch.arange(prob_size)[None, :].repeat(B_V, 1)
-        new_list_len = prob_size - list.shape[1]
-        index_2 = list.type(torch.long)
-        index_1 = torch.arange(B_V, dtype=torch.long)[:, None].expand(
-            B_V, index_2.shape[1]
-        )
-        new_list[index_1, index_2] = -2
-        unselect_list = new_list[torch.gt(new_list, -1)].view(B_V, new_list_len)
-
-        new_data = data
-        emb_dim = data.shape[-1]
-        new_data_len = new_list_len
-        index_2_ = unselect_list.repeat_interleave(repeats=emb_dim, dim=1)
-        index_1_ = torch.arange(B_V, dtype=torch.long)[:, None].expand(
-            B_V, index_2_.shape[1]
-        )
-        index_3_ = torch.arange(emb_dim)[None, :].repeat(repeats=(B_V, new_data_len))
-        new_data_ = new_data[index_1_, index_2_, index_3_].view(
-            B_V, new_data_len, emb_dim
-        )
-
-        return new_data_
-
-    def _get_encoding(self, encoded_nodes, node_index_to_pick):
-        """
-        Get the embeddings of specific nodes.
-        """
-        batch_size = node_index_to_pick.size(0)
-        pomo_size = node_index_to_pick.size(1)
-        embedding_dim = encoded_nodes.size(2)
-
-        gathering_index = node_index_to_pick[:, :, None].expand(
-            batch_size, pomo_size, embedding_dim
-        )
-
-        assert torch.all(
-            (gathering_index >= 0) & (gathering_index < encoded_nodes.size(1))
-        ), (
-            f"Index out of bounds: gathering_index contains values up to {gathering_index.max().item()}, "
-            f"but dimension 1 of encoded_nodes has size {encoded_nodes.size(1)}. "
-            f"Check gathering_index generation logic. Device: {gathering_index.device}"
-        )
-
-        picked_nodes = encoded_nodes.gather(dim=1, index=gathering_index)
-        return picked_nodes
-
-    def forward(self, encoder, data, selected_node_list, **kwargs):
-        projection = kwargs.get("projection", None)
-        MVDF = kwargs.get("MVDF", False)
-        batch_size_V = data.shape[0]
-        problem_size = data.shape[1]
-        new_data = data
-
-        left_node_coor = self._get_new_data(
-            new_data, selected_node_list, problem_size, batch_size_V
-        )
-        left_node_num = left_node_coor.shape[1]
-
-        first_and_last_node = self._get_encoding(
-            new_data, selected_node_list[:, [0, -1]]
-        )
-        first_node_coor = first_and_last_node[:, [0]]
-        last_node_coor = first_and_last_node[:, [1]]
-
-        k_nearest_nodes = self.model_params["k_nearest_nodes"]
-        knearest = self.model_params["knearest"]
-
-        if knearest:
-            if left_node_num > k_nearest_nodes:
-                k = k_nearest_nodes
-                distance1 = torch.norm(left_node_coor - last_node_coor, dim=2)
-                _, sort_index = torch.topk(distance1, k=k, dim=1, largest=False)
-                left_node_coor = (
-                    self._get_encoding(left_node_coor, sort_index).clone().detach()
-                )
-
-        all_nodes_coor = torch.cat(
-            (first_node_coor, left_node_coor, last_node_coor), dim=1
-        )
-
-        if self.model_params["coor_projection"] and (left_node_num > 1):
-            all_nodes_coor = projection(all_nodes_coor)
-            if MVDF:
-                all_nodes_coor = MVDF_POMO(all_nodes_coor)
-
-        encoded_nodes = encoder(all_nodes_coor)
-        first_node_embed = encoded_nodes[:, [0], :]
-        last_node_embed = encoded_nodes[:, [-1], :]
-        left_encoded_node = encoded_nodes[:, 1:-1, :]
-
-        embedded_first_node_ = self.embedding_first_node(first_node_embed)
-        embedded_last_node_ = self.embedding_last_node(last_node_embed)
-
-        out = torch.cat(
-            (embedded_first_node_, left_encoded_node, embedded_last_node_), dim=1
-        )
-
-        for layer in self.layers:
-            out = layer(out)
-
-        out = self.Linear_final(out).squeeze(-1)
-        out[:, [0, -1]] = out[:, [0, -1]] + float("-inf")
-        if MVDF and self.model_params["coor_projection"] and (left_node_num > 1):
-            out = out.reshape(-1, batch_size_V, out.size(1)).sum(0)
-
-        props = F.softmax(out, dim=-1)
-        props = props[:, 1:-1]
-
-        index_small = torch.le(props, 1e-5)
-        props_clone = props.clone()
-        props_clone[index_small] = props_clone[index_small] + torch.tensor(
-            1e-7, dtype=props_clone[index_small].dtype
-        )
-        props = props_clone
-
-        if knearest:
-            if left_node_num > k_nearest_nodes:
-                new_props = torch.zeros(batch_size_V, left_node_num)
-                index_1_ = torch.arange(batch_size_V, dtype=torch.long)[:, None].expand(
-                    batch_size_V, k
-                )
-                index_2_ = sort_index.type(torch.long)
-                new_props[index_1_, index_2_] = props.reshape(
-                    batch_size_V, sort_index.shape[1]
-                )
-                props = new_props
-
-        new_props = torch.zeros(batch_size_V, problem_size)
-        index_1_ = torch.arange(batch_size_V, dtype=torch.long)[:, None].expand(
-            batch_size_V, selected_node_list.shape[1]
-        )
-        index_2_ = selected_node_list.type(torch.long)
-        new_props[index_1_, index_2_] = -2
-        index = torch.gt(new_props, -1).view(batch_size_V, -1)
-        new_props[index] = props.ravel()
-
-        return new_props
-
-
 class EncoderLayer(nn.Module):
-    """
-    A single layer of the encoder.
-    It consists of a multi-head attention layer and a feed-forward layer.
-    """
-
     def __init__(self, **model_params):
         super().__init__()
         self.model_params = model_params
-        embedding_dim = self.model_params["embedding_dim"]
-        head_num = self.model_params["head_num"]
-        qkv_dim = self.model_params["qkv_dim"]
+        embedding_dim = self.model_params['embedding_dim']
+        head_num = self.model_params['head_num']
+        qkv_dim = self.model_params['qkv_dim']
 
         self.Wq = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
         self.Wk = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
         self.Wv = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
         self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
+
+        self.addAndNormalization1 = Add_And_Normalization_Module(**model_params)
         self.feedForward = Feed_Forward_Module(**model_params)
+        self.addAndNormalization2 = Add_And_Normalization_Module(**model_params)
 
     def forward(self, input1):
-        head_num = self.model_params["head_num"]
+        # input.shape: (batch, problem, EMBEDDING_DIM)
+        head_num = self.model_params['head_num']
+
         q = reshape_by_heads(self.Wq(input1), head_num=head_num)
         k = reshape_by_heads(self.Wk(input1), head_num=head_num)
         v = reshape_by_heads(self.Wv(input1), head_num=head_num)
+        # q shape: (batch, HEAD_NUM, problem, KEY_DIM)
+
         out_concat = multi_head_attention(q, k, v)
+        # shape: (batch, problem, HEAD_NUM*KEY_DIM)
+
         multi_head_out = self.multi_head_combine(out_concat)
-        out1 = input1 + multi_head_out
+        # shape: (batch, problem, EMBEDDING_DIM)
+
+        out1 = self.addAndNormalization1(input1, multi_head_out)
         out2 = self.feedForward(out1)
-        out3 = out1 + out2
+        out3 = self.addAndNormalization2(out1, out2)
+
         return out3
+        # shape: (batch, problem, EMBEDDING_DIM)
 
 
-class DecoderLayer(nn.Module):
-    """
-    A single layer of the decoder.
-    It consists of a multi-head attention layer and a feed-forward layer.
-    """
+########################################
+# DECODER
+########################################
 
+class TSP_Decoder(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
         self.model_params = model_params
-        embedding_dim = self.model_params["embedding_dim"]
-        head_num = self.model_params["head_num"]
-        qkv_dim = self.model_params["qkv_dim"]
+        embedding_dim = self.model_params['embedding_dim']
+        self.use_polynet = model_params.get('use_polynet', False)
+        head_num = self.model_params['head_num']
+        qkv_dim = self.model_params['qkv_dim']
 
-        self.Wq = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+        self.Wq_first = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+        self.Wq_last = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
         self.Wk = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
         self.Wv = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+
         self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
-        self.feedForward = Feed_Forward_Module(**model_params)
 
-    def forward(self, input1):
-        head_num = self.model_params["head_num"]
-        q = reshape_by_heads(self.Wq(input1), head_num=head_num)
-        k = reshape_by_heads(self.Wk(input1), head_num=head_num)
-        v = reshape_by_heads(self.Wv(input1), head_num=head_num)
-        out_concat = multi_head_attention(q, k, v)
-        multi_head_out = self.multi_head_combine(out_concat)
-        out1 = input1 + multi_head_out
-        out2 = self.feedForward(out1)
-        out3 = out1 + out2
-        return out3
+        self.k = None  # saved key, for multi-head attention
+        self.v = None  # saved value, for multi-head_attention
+        self.single_head_key = None  # saved, for single-head attention
+        self.q_first = None  # saved q1, for multi-head attention
+        self.z = None  # saved policy code for PolyNet-style decoding
 
+        if self.use_polynet:
+            z_dim = self.model_params['z_dim']
+            poly_embedding_dim = self.model_params['poly_embedding_dim']
+            self.poly_layer_1 = nn.Linear(embedding_dim + z_dim, poly_embedding_dim)
+            self.poly_layer_2 = nn.Linear(poly_embedding_dim, embedding_dim)
+            self.use_z_gate = self.model_params.get('use_z_gate', False)
+            if self.use_z_gate:
+                self.poly_gate_1 = nn.Linear(embedding_dim + z_dim, poly_embedding_dim)
+                self.poly_gate_2 = nn.Linear(poly_embedding_dim, embedding_dim)
+                nn.init.zeros_(self.poly_gate_2.weight)
+                nn.init.constant_(self.poly_gate_2.bias, -4.0)
+            # Start exactly as the POMO decoder, then learn residual policy diversity.
+            nn.init.zeros_(self.poly_layer_2.weight)
+            nn.init.zeros_(self.poly_layer_2.bias)
+
+    def set_kv(self, encoded_nodes, z=None):
+        # encoded_nodes.shape: (batch, problem, embedding)
+        head_num = self.model_params['head_num']
+
+        self.k = reshape_by_heads(self.Wk(encoded_nodes), head_num=head_num)
+        self.v = reshape_by_heads(self.Wv(encoded_nodes), head_num=head_num)
+        # shape: (batch, head_num, pomo, qkv_dim)
+        self.single_head_key = encoded_nodes.transpose(1, 2)
+        # shape: (batch, embedding, problem)
+        self.z = z
+
+    def set_q1(self, encoded_q1):
+        # encoded_q.shape: (batch, n, embedding)  # n can be 1 or pomo
+        head_num = self.model_params['head_num']
+
+        self.q_first = reshape_by_heads(self.Wq_first(encoded_q1), head_num=head_num)
+        # shape: (batch, head_num, n, qkv_dim)
+
+    def forward(self, encoded_last_node, ninf_mask, logit_bias=None):
+        # encoded_last_node.shape: (batch, pomo, embedding)
+        # ninf_mask.shape: (batch, pomo, problem)
+
+        head_num = self.model_params['head_num']
+
+        #  Multi-Head Attention
+        #######################################################
+        q_last = reshape_by_heads(self.Wq_last(encoded_last_node), head_num=head_num)
+        # shape: (batch, head_num, pomo, qkv_dim)
+
+        q = self.q_first + q_last
+        # shape: (batch, head_num, pomo, qkv_dim)
+
+        out_concat = multi_head_attention(q, self.k, self.v, rank3_ninf_mask=ninf_mask)
+        # shape: (batch, pomo, head_num*qkv_dim)
+
+        mh_atten_out = self.multi_head_combine(out_concat)
+        # shape: (batch, pomo, embedding)
+
+        if self.use_polynet:
+            if self.z is None:
+                z_dim = self.model_params['z_dim']
+                self.z = torch.zeros(
+                    size=(mh_atten_out.size(0), mh_atten_out.size(1), z_dim),
+                    device=mh_atten_out.device,
+                )
+            poly_input = torch.cat((mh_atten_out, self.z), dim=2)
+            poly_out = self.poly_layer_2(F.relu(self.poly_layer_1(poly_input)))
+            if self.model_params.get('use_z_gate', False):
+                gate = torch.sigmoid(self.poly_gate_2(F.relu(self.poly_gate_1(poly_input))))
+                poly_out = gate * poly_out
+            mh_atten_out = mh_atten_out + poly_out
+
+        #  Single-Head Attention, for probability calculation
+        #######################################################
+        score = torch.matmul(mh_atten_out, self.single_head_key)
+        # shape: (batch, pomo, problem)
+
+        sqrt_embedding_dim = self.model_params['sqrt_embedding_dim']
+        logit_clipping = self.model_params['logit_clipping']
+
+        score_scaled = score / sqrt_embedding_dim
+        # shape: (batch, pomo, problem)
+
+        if logit_bias is not None:
+            if logit_bias.shape != score_scaled.shape:
+                raise ValueError(
+                    "logit_bias shape must match decoder score shape: "
+                    f"got {tuple(logit_bias.shape)}, expected {tuple(score_scaled.shape)}"
+                )
+            logit_bias = logit_bias.to(device=score_scaled.device, dtype=score_scaled.dtype)
+            score_scaled = score_scaled + logit_bias
+
+        score_clipped = logit_clipping * torch.tanh(score_scaled)
+
+        score_masked = score_clipped + ninf_mask
+
+        probs = F.softmax(score_masked, dim=2)
+        # shape: (batch, pomo, problem)
+
+        return probs
+
+
+########################################
+# NN SUB CLASS / FUNCTIONS
+########################################
 
 def reshape_by_heads(qkv, head_num):
-    """
-    Reshapes the query, key, or value tensor for multi-head attention.
-    """
-    batch_s, n, _ = qkv.size()
+    # q.shape: (batch, n, head_num*key_dim)   : n can be either 1 or PROBLEM_SIZE
+
+    batch_s = qkv.size(0)
+    n = qkv.size(1)
+
     q_reshaped = qkv.reshape(batch_s, n, head_num, -1)
+    # shape: (batch, n, head_num, key_dim)
+
     q_transposed = q_reshaped.transpose(1, 2)
+    # shape: (batch, head_num, n, key_dim)
+
     return q_transposed
 
 
-def multi_head_attention(q, k, v):
-    """
-    Multi-head attention mechanism.
-    """
-    batch_s, head_num, n, key_dim = q.size()
+def multi_head_attention(q, k, v, rank2_ninf_mask=None, rank3_ninf_mask=None):
+    # q shape: (batch, head_num, n, key_dim)   : n can be either 1 or PROBLEM_SIZE
+    # k,v shape: (batch, head_num, problem, key_dim)
+    # rank2_ninf_mask.shape: (batch, problem)
+    # rank3_ninf_mask.shape: (batch, group, problem)
+
+    batch_s = q.size(0)
+    head_num = q.size(1)
+    n = q.size(2)
+    key_dim = q.size(3)
+
+    input_s = k.size(2)
+
     score = torch.matmul(q, k.transpose(2, 3))
-    score_scaled = score / torch.sqrt(torch.tensor(key_dim, dtype=torch.float))
+    # shape: (batch, head_num, n, problem)
+
+    score_scaled = score / torch.sqrt(torch.tensor(key_dim, dtype=torch.float, device=q.device))
+    if rank2_ninf_mask is not None:
+        score_scaled = score_scaled + rank2_ninf_mask[:, None, None, :].expand(batch_s, head_num, n, input_s)
+    if rank3_ninf_mask is not None:
+        score_scaled = score_scaled + rank3_ninf_mask[:, None, :, :].expand(batch_s, head_num, n, input_s)
+
     weights = nn.Softmax(dim=3)(score_scaled)
+    # shape: (batch, head_num, n, problem)
+
     out = torch.matmul(weights, v)
+    # shape: (batch, head_num, n, key_dim)
+
     out_transposed = out.transpose(1, 2)
+    # shape: (batch, n, head_num, key_dim)
+
     out_concat = out_transposed.reshape(batch_s, n, head_num * key_dim)
+    # shape: (batch, n, head_num*key_dim)
+
     return out_concat
 
 
-class Feed_Forward_Module(nn.Module):
-    """
-    A feed-forward module used in the encoder and decoder layers.
-    """
-
+class Add_And_Normalization_Module(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
-        embedding_dim = model_params["embedding_dim"]
-        ff_hidden_dim = model_params["ff_hidden_dim"]
+        embedding_dim = model_params['embedding_dim']
+        self.norm = nn.InstanceNorm1d(embedding_dim, affine=True, track_running_stats=False)
+
+    def forward(self, input1, input2):
+        # input.shape: (batch, problem, embedding)
+
+        added = input1 + input2
+        # shape: (batch, problem, embedding)
+
+        transposed = added.transpose(1, 2)
+        # shape: (batch, embedding, problem)
+
+        normalized = self.norm(transposed)
+        # shape: (batch, embedding, problem)
+
+        back_trans = normalized.transpose(1, 2)
+        # shape: (batch, problem, embedding)
+
+        return back_trans
+
+
+class Feed_Forward_Module(nn.Module):
+    def __init__(self, **model_params):
+        super().__init__()
+        embedding_dim = model_params['embedding_dim']
+        ff_hidden_dim = model_params['ff_hidden_dim']
+
         self.W1 = nn.Linear(embedding_dim, ff_hidden_dim)
         self.W2 = nn.Linear(ff_hidden_dim, embedding_dim)
 
     def forward(self, input1):
+        # input.shape: (batch, problem, embedding)
+
         return self.W2(F.relu(self.W1(input1)))
-
-
-def MVDF_POMO(problems):
-    # problems.shape: (batch, problem, 2)
-    x = problems[:, :, [0]]
-    y = problems[:, :, [1]]
-    # x,y shape: (batch, problem, 1)
-    dat1 = torch.cat((x, y), dim=2)
-    dat2 = torch.cat((1 - x, y), dim=2)
-    dat3 = torch.cat((x, 1 - y), dim=2)
-    dat4 = torch.cat((1 - x, 1 - y), dim=2)
-    dat5 = torch.cat((y, x), dim=2)
-    dat6 = torch.cat((1 - y, x), dim=2)
-    dat7 = torch.cat((y, 1 - x), dim=2)
-    dat8 = torch.cat((1 - y, 1 - x), dim=2)
-    MVDF_problems = torch.cat((dat1, dat2, dat3, dat4, dat5, dat6, dat7, dat8), dim=0)
-    # shape: (8*batch, problem, 2)
-    return MVDF_problems

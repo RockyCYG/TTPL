@@ -25,11 +25,11 @@ import sys
 from typing import Literal, Optional, List, Tuple
 
 import numpy as np
-import pytz
 import json
 import logging
 from threading import Lock
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from ...base import Function
 
@@ -54,7 +54,7 @@ class ProfilerBase:
 
         self._num_objs = num_objs
         self._num_samples = initial_num_samples
-        self._process_start_time = datetime.now(pytz.timezone('Asia/Shanghai'))
+        self._process_start_time = datetime.now(ZoneInfo('Asia/Shanghai'))
         self._result_folder = self._process_start_time.strftime('%Y%m%d_%H%M%S')
 
         self._log_dir = log_dir

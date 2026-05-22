@@ -20,21 +20,25 @@
 import sys
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(PROJECT_ROOT)
 
-import pytz
 import inspect
 import llm4ad
 
 from llm4ad.task import import_all_evaluation_classes
 from llm4ad.method import import_all_method_classes_from_subfolders
 from llm4ad.tools.llm import import_all_llm_classes_from_subfolders
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 
-import_all_evaluation_classes(os.path.join(os.getcwd(), "llm4ad/task"))
-import_all_method_classes_from_subfolders(os.path.join(os.getcwd(), "llm4ad/method"))
-import_all_llm_classes_from_subfolders(os.path.join(os.getcwd(), "llm4ad/tools/llm"))
+import_all_evaluation_classes(os.path.join(PROJECT_ROOT, "llm4ad/task"))
+import_all_method_classes_from_subfolders(os.path.join(PROJECT_ROOT, "llm4ad/method"))
+import_all_llm_classes_from_subfolders(os.path.join(PROJECT_ROOT, "llm4ad/tools/llm"))
 
 # Dynamically import all usable classes from the 'llm4ad' package
 for module in [llm4ad.tools.llm, llm4ad.tools.profiler, llm4ad.task, llm4ad.method]:
@@ -119,14 +123,16 @@ def main(llm: dict, method: dict, evaluation: dict, profiler: dict):
 
 if __name__ == "__main__":
     # ============= Configuration =============
-    # Choose problem type: 'tsp' or 'cvrp'
-    PROBLEM_TYPE = "tsp"  # Change this to 'cvrp' for CVRP problem
+    # Choose problem type: 'tsp', 'tsp_logit_bias', or 'cvrp'.
+    # 'tsp_logit_bias' searches an additive POMO decoder bias for checkpoint-500.
+    PROBLEM_TYPE = "tsp_logit_bias"
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
     llm = {
-        "name": "HttpsApi",
-        "host": "***************************",
-        "key": "***************************",
-        "model": "***************************",
+        "name": "OpenAIAPI",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": OPENAI_API_KEY,
+        "model": "openai/gpt-4o-mini",
     }
 
     method = {
@@ -137,27 +143,27 @@ if __name__ == "__main__":
         "num_samplers": 10,
         "num_evaluators": 10,
         "debug_mode": True,
-        "selection": 2,
+        "selection_num": 2,
     }
 
     evaluation = {
         "name": "ProjectionEvaluation",
-        "timeout_seconds": 5,
+        "timeout_seconds": 120,
         "problem_type": PROBLEM_TYPE,  # Automatically use the selected problem type
     }
 
     temp_str1 = evaluation["name"]
     temp_str2 = method["name"]
     temp_str3 = PROBLEM_TYPE.upper()  # Add problem type to log folder name
-    process_start_time = datetime.now(pytz.timezone("Asia/Shanghai"))
-    b = os.path.abspath("..")
-    log_folder = (
-        b
-        + "/TTPL/llm4ad/logs/"
-        + process_start_time.strftime("%Y%m%d_%H%M%S")
+    process_start_time = datetime.now(ZoneInfo("Asia/Shanghai"))
+    log_folder = os.path.join(
+        PROJECT_ROOT,
+        "llm4ad",
+        "logs",
+        process_start_time.strftime("%Y%m%d_%H%M%S")
         + f"_{temp_str1}"
         + f"_{temp_str2}"
-        + f"_{temp_str3}"
+        + f"_{temp_str3}",
     )
 
     profiler = {"name": "ProfilerBase", "log_dir": log_folder}

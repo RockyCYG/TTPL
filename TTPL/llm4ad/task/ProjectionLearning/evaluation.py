@@ -69,6 +69,29 @@ def evaluate_tsp(callable_func) -> float:
     return -gap
 
 
+def evaluate_tsp_logit_bias(callable_func) -> float:
+    """Evaluate a POMO TSP decoder logit-bias function."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="test")
+    add_common_args_tsp(parser)
+    args = parser.parse_args()
+    args.inference_backend = "pomo"
+    args.model_load_epoch = 500
+    args.pomo_log_dist_bias = False
+    try:
+        print("Evaluating TSP POMO logit bias.....")
+        score_optimal, score_student, gap = main_test_tsp(
+            args,
+            logit_bias=callable_func,
+        )
+    except Exception as e:
+        print(e)
+        gap = 10000000
+
+    return -gap
+
+
 def evaluate_cvrp(callable_func) -> float:
     """Evaluate function for LEHD on CVRP with different norm method"""
     import argparse
@@ -121,6 +144,8 @@ class ProjectionEvaluation(Evaluation):
         """Evaluate the program based on the problem type."""
         if self.problem_type == "tsp":
             return evaluate_tsp(callable_func)
+        elif self.problem_type in ("tsp_logit_bias", "tsp_bias"):
+            return evaluate_tsp_logit_bias(callable_func)
         elif self.problem_type == "cvrp":
             return evaluate_cvrp(callable_func)
         else:

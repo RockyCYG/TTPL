@@ -1,0 +1,20 @@
+[2026-05-21 22:25:18] test_tsp.py(231) : DEBUG_MODE: False
+[2026-05-21 22:25:18] test_tsp.py(232) : USE_CUDA: False, CUDA_DEVICE_NUM: 0
+[2026-05-21 22:25:18] test_tsp.py(235) : env_params{'mode': 'test', 'sub_path': False, 'data_path': '/home/cyg/TTPL/TTPL/lehd/TSP/data/val', 'tsplib_path': '/home/cyg/TTPL/TTPL/lehd/TSP/data/val', 'test_in_tsplib': True, 'tsplib_opt_costs': {}, 'RRC_budget': 0, 'random_insertion': False, 'RRC_range': 1000}
+[2026-05-21 22:25:18] test_tsp.py(235) : model_params{'mode': 'test', 'embedding_dim': 128, 'sqrt_embedding_dim': 11.313708498984761, 'decoder_layer_num': 6, 'qkv_dim': 16, 'head_num': 8, 'ff_hidden_dim': 512, 'k_nearest_nodes': 100, 'knearest': True, 'coor_projection': True}
+[2026-05-21 22:25:18] test_tsp.py(235) : tester_params{'use_cuda': False, 'cuda_device_num': 0, 'model_load': {'path': '/home/cyg/TTPL/TTPL/lehd/TSP/result/TSP100_model', 'epoch': 500}, 'test_episodes': 10, 'test_batch_size': 1, 'inference_backend': 'pomo', 'pomo_aug_factor': 8, 'pomo_log_dist_bias': False, 'pomo_log_dist_topk': 20, 'pomo_log_dist_alpha': 1.0, 'pomo_log_dist_eps': 1e-06}
+[2026-05-21 22:25:18] test_tsp.py(235) : logger_params{'log_file': {'desc': 'test_counter_0_tsplibTrue_tsp0_RRC0_range1000_knearestTrue_num100_RI_False_projection_True', 'filename': 'log.txt', 'filepath': '/home/cyg/TTPL/TTPL/lehd/TSP/result/20260521_232518_test_counter_0_tsplibTrue_tsp0_RRC0_range1000_knearestTrue_num100_RI_False_projection_True'}}
+[2026-05-21 22:25:34] TSPTester.py(321) : episode   1/ 10, Elapsed[0.27m], Remain[2.43m], name:ch150, size:150, opt:6528.0000, pomo_no_aug:6563.0000, pomo_aug:6556.0000, gap:0.4289%
+[2026-05-21 22:25:37] TSPTester.py(321) : episode   2/ 10, Elapsed[0.32m], Remain[1.26m], name:eil101, size:101, opt:629.0000, pomo_no_aug:632.0000, pomo_aug:630.0000, gap:0.1590%
+[2026-05-21 22:25:38] TSPTester.py(321) : episode   3/ 10, Elapsed[0.34m], Remain[0.80m], name:kroA100, size:100, opt:21282.0000, pomo_no_aug:21333.0000, pomo_aug:21295.0000, gap:0.0611%
+[2026-05-21 22:25:58] TSPTester.py(321) : episode   4/ 10, Elapsed[0.66m], Remain[1.00m], name:kroA200, size:200, opt:29368.0000, pomo_no_aug:29405.0000, pomo_aug:29405.0000, gap:0.1260%
+[2026-05-21 22:26:04] TSPTester.py(321) : episode   5/ 10, Elapsed[0.77m], Remain[0.77m], name:kroB150, size:150, opt:26130.0000, pomo_no_aug:26315.0000, pomo_aug:26217.0000, gap:0.3330%
+[2026-05-21 22:26:16] TSPTester.py(321) : episode   6/ 10, Elapsed[0.97m], Remain[0.65m], name:kroC100, size:100, opt:20749.0000, pomo_no_aug:20753.0000, pomo_aug:20749.0000, gap:0.0000%
+[2026-05-21 22:26:17] TSPTester.py(321) : episode   7/ 10, Elapsed[0.99m], Remain[0.42m], name:kroE100, size:100, opt:22068.0000, pomo_no_aug:22302.0000, pomo_aug:22182.0000, gap:0.5166%
+[2026-05-21 22:26:19] TSPTester.py(321) : episode   8/ 10, Elapsed[1.02m], Remain[0.25m], name:pr124, size:124, opt:59030.0000, pomo_no_aug:59663.0000, pomo_aug:59076.0000, gap:0.0779%
+[2026-05-21 22:26:23] TSPTester.py(321) : episode   9/ 10, Elapsed[1.09m], Remain[0.12m], name:pr226, size:226, opt:80369.0000, pomo_no_aug:81711.0000, pomo_aug:81254.0000, gap:1.1012%
+[2026-05-21 22:26:45] TSPTester.py(321) : episode  10/ 10, Elapsed[1.46m], Remain[0.00m], name:pr299, size:299, opt:48191.0000, pomo_no_aug:49309.0000, pomo_aug:48796.0000, gap:1.2554%
+[2026-05-21 22:26:45] TSPTester.py(330) :  *** POMO Test Done *** 
+[2026-05-21 22:26:45] TSPTester.py(331) :  Teacher SCORE: 31434.4000 
+[2026-05-21 22:26:45] TSPTester.py(332) :  Student SCORE: 31616.0000 
+[2026-05-21 22:26:45] TSPTester.py(333) :  Average Gap: 0.4059%

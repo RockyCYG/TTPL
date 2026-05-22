@@ -1,7 +1,23 @@
 from dataclasses import dataclass
+import os
+import re
 import numpy as np
 import torch
 from tqdm import tqdm
+
+
+TSPLIB_BEST_KNOWN = {
+    "ch150": 6528,
+    "eil101": 629,
+    "kroa100": 21282,
+    "kroa200": 29368,
+    "krob150": 26130,
+    "kroc100": 20749,
+    "kroe100": 22068,
+    "pr124": 59030,
+    "pr226": 80369,
+    "pr299": 48191,
+}
 
 
 @dataclass
@@ -53,6 +69,11 @@ class TSPEnv:
         self.tsplib_cost = None
         self.tsplib_name = None
         self.tsplib_problems = None
+        self.tsplib_edge_weight_type = "EUC_2D"
+        self.tsplib_opt_costs = {
+            str(name).lower(): float(cost)
+            for name, cost in env_params.get("tsplib_opt_costs", {}).items()
+        }
         self.problem_max_min = None
         self.episode = None
 
@@ -77,9 +98,19 @@ class TSPEnv:
             self.tsplib_problems, self.tsplib_cost, self.tsplib_name = (
                 self.make_tsplib_data(self.tsplib_path, episode)
             )
-            self.tsplib_cost = torch.tensor(self.tsplib_cost)
-            self.problems = (
-                torch.from_numpy(self.tsplib_problems.reshape(1, -1, 2)).cuda().float()
+            device = torch.empty(0).device
+            self.tsplib_cost = torch.tensor(
+                self.tsplib_cost, dtype=torch.float32, device=device
+            )
+            self.problems = torch.from_numpy(
+                self.tsplib_problems.reshape(1, -1, 2)
+            ).to(device=device, dtype=torch.float32)
+
+            if self.problems.shape[0] != batch_size:
+                self.batch_size = self.problems.shape[0]
+                batch_size = self.batch_size
+            self.selected_node_list = torch.zeros(
+                (batch_size, 0), dtype=torch.long, device=device
             )
 
             # Normalize problems
@@ -177,10 +208,30 @@ class TSPEnv:
         print("Raw dataset loaded successfully!")
 
     def make_tsplib_data(self, filename, episode):
+        """Load one TSPLIB instance.
+
+        This supports both the repository's original one-line CSV format and
+        standard TSPLIB .tsp files or directories of .tsp files.
+        """
+        standard_tsp_path = self._get_standard_tsplib_path(filename, episode)
+        if standard_tsp_path is not None:
+            coords, cost, name, edge_weight_type = self._read_standard_tsplib_file(
+                standard_tsp_path
+            )
+            self.tsplib_edge_weight_type = edge_weight_type
+            return (
+                np.array([coords], dtype=float),
+                np.array([cost], dtype=float),
+                np.array([name], dtype=str),
+            )
+
         instance_data = []
         cost = []
         instance_name = []
-        for line in open(filename, "r").readlines()[episode : episode + 1]:
+        self.tsplib_edge_weight_type = "EUC_2D"
+        with open(filename, "r") as f:
+            lines = f.readlines()
+        for line in lines[episode : episode + 1]:
             line = line.rstrip("\n")
             line = line.replace("[", "")
             line = line.replace("]", "")
@@ -190,13 +241,148 @@ class TSPEnv:
             instance_data.append(line_data)
             cost.append(np.array(line[1], dtype=float))
             instance_name.append(np.array(line[0], dtype=str))
-        instance_data = np.array(
-            instance_data
-        )
+        instance_data = np.array(instance_data)
         cost = np.array(cost)
         instance_name = np.array(instance_name)
 
         return instance_data, cost, instance_name
+
+    def _get_standard_tsplib_path(self, filename, episode):
+        if os.path.isdir(filename):
+            tsp_files = sorted(
+                os.path.join(filename, name)
+                for name in os.listdir(filename)
+                if name.lower().endswith(".tsp")
+            )
+            if episode >= len(tsp_files):
+                raise IndexError(
+                    f"TSPLIB episode {episode} is out of range for {filename}"
+                )
+            return tsp_files[episode]
+
+        if filename.lower().endswith(".tsp"):
+            if episode != 0:
+                raise IndexError(
+                    f"Single TSPLIB file {filename} only supports episode 0"
+                )
+            return filename
+
+        return None
+
+    def _read_standard_tsplib_file(self, tsp_path):
+        header = {}
+        coords = []
+        reading_coords = False
+
+        with open(tsp_path, "r") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                upper_line = line.upper()
+                if upper_line == "NODE_COORD_SECTION":
+                    reading_coords = True
+                    continue
+                if upper_line == "EOF":
+                    break
+
+                if reading_coords:
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    coords.append([float(parts[1]), float(parts[2])])
+                else:
+                    key, value = self._split_tsplib_header_line(line)
+                    if key:
+                        header[key] = value
+
+        if not coords:
+            raise ValueError(f"No NODE_COORD_SECTION found in {tsp_path}")
+
+        name = header.get("NAME") or os.path.splitext(os.path.basename(tsp_path))[0]
+        dimension = self._extract_int(header.get("DIMENSION"))
+        if dimension is not None and dimension != len(coords):
+            raise ValueError(
+                f"{tsp_path} declares DIMENSION={dimension}, "
+                f"but contains {len(coords)} coordinates"
+            )
+
+        edge_weight_type = header.get("EDGE_WEIGHT_TYPE", "EUC_2D").upper()
+        if edge_weight_type not in ("EUC_2D", "CEIL_2D"):
+            raise ValueError(
+                f"Unsupported TSPLIB EDGE_WEIGHT_TYPE={edge_weight_type!r} "
+                f"in {tsp_path}"
+            )
+
+        cost = self._lookup_tsplib_cost(tsp_path, name, header)
+        return np.array(coords, dtype=float), cost, name, edge_weight_type
+
+    @staticmethod
+    def _split_tsplib_header_line(line):
+        if ":" in line:
+            key, value = line.split(":", 1)
+        else:
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                return None, None
+            key, value = parts
+        return key.strip().upper(), value.strip()
+
+    @staticmethod
+    def _extract_int(value):
+        if value is None:
+            return None
+        match = re.search(r"-?\d+", str(value))
+        return int(match.group()) if match else None
+
+    @staticmethod
+    def _extract_float(value):
+        if value is None:
+            return None
+        match = re.search(r"-?\d+(?:\.\d+)?", str(value))
+        return float(match.group()) if match else None
+
+    def _lookup_tsplib_cost(self, tsp_path, name, header):
+        normalized_name = name.lower()
+        if normalized_name in self.tsplib_opt_costs:
+            return self.tsplib_opt_costs[normalized_name]
+
+        for key in ("OPTIMAL_VALUE", "OPTIMUM", "BEST_KNOWN", "BEST_KNOWN_VALUE"):
+            value = self._extract_float(header.get(key))
+            if value is not None:
+                return value
+
+        for key, value in header.items():
+            if "COMMENT" in key and re.search(r"opt|best|bks", value, re.IGNORECASE):
+                parsed_value = self._extract_float(value)
+                if parsed_value is not None:
+                    return parsed_value
+
+        sidecar_cost = self._read_tsplib_sidecar_cost(tsp_path)
+        if sidecar_cost is not None:
+            return sidecar_cost
+
+        if normalized_name in TSPLIB_BEST_KNOWN:
+            return float(TSPLIB_BEST_KNOWN[normalized_name])
+
+        raise ValueError(
+            f"No optimal/best-known cost found for TSPLIB instance {name!r}. "
+            "Pass --tsplib_opt_costs name=value or add a sidecar .opt/.sol file."
+        )
+
+    def _read_tsplib_sidecar_cost(self, tsp_path):
+        base_path, _ = os.path.splitext(tsp_path)
+        for suffix in (".opt", ".opt.txt", ".sol", ".bks"):
+            sidecar_path = base_path + suffix
+            if not os.path.isfile(sidecar_path):
+                continue
+            with open(sidecar_path, "r") as f:
+                for line in f:
+                    value = self._extract_float(line)
+                    if value is not None:
+                        return value
+        return None
 
     def destroy_solution(self, problem, complete_solution):
         """Destroy a part of the solution for repair."""
@@ -276,18 +462,14 @@ class TSPEnv:
                 self.batch_size, self.problems.shape[1], 2
             )
             ordered_seq = self.problems.gather(dim=1, index=gathering_index)
-            rolled_seq = ordered_seq.roll(dims=1, shifts=-1)
-            travel_distances = ((ordered_seq - rolled_seq) ** 2).sum(2).sqrt().sum(1)
+            travel_distances = self._calculate_tour_lengths(ordered_seq)
 
         # Calculate distance for the student model's tour
         gathering_index_student = self.selected_student_list.unsqueeze(2).expand(
             -1, self.problems.shape[1], 2
         )
         ordered_seq_student = self.problems.gather(dim=1, index=gathering_index_student)
-        rolled_seq_student = ordered_seq_student.roll(dims=1, shifts=-1)
-        travel_distances_student = (
-            ((ordered_seq_student - rolled_seq_student) ** 2).sum(2).sqrt().sum(1)
-        )
+        travel_distances_student = self._calculate_tour_lengths(ordered_seq_student)
 
         return travel_distances, travel_distances_student
 
@@ -313,6 +495,16 @@ class TSPEnv:
             )
             ordered_seq = problems.gather(dim=1, index=gathering_index)
 
+        return self._calculate_tour_lengths(ordered_seq)
+
+    def _calculate_tour_lengths(self, ordered_seq):
         rolled_seq = ordered_seq.roll(dims=1, shifts=-1)
-        travel_distances = ((ordered_seq - rolled_seq) ** 2).sum(2).sqrt().sum(1)
-        return travel_distances
+        edge_lengths = ((ordered_seq - rolled_seq) ** 2).sum(2).sqrt()
+
+        if self.test_in_tsplib:
+            if self.tsplib_edge_weight_type == "EUC_2D":
+                edge_lengths = torch.floor(edge_lengths + 0.5)
+            elif self.tsplib_edge_weight_type == "CEIL_2D":
+                edge_lengths = torch.ceil(edge_lengths)
+
+        return edge_lengths.sum(1)

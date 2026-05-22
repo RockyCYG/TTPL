@@ -1,0 +1,53 @@
+[2026-05-21 18:46:35] profile.py(246) : ====================================================================
+[2026-05-21 18:46:35] profile.py(247) : LLM Parameters
+[2026-05-21 18:46:35] profile.py(248) : --------------------------------------------------------------------
+[2026-05-21 18:46:35] profile.py(249) :   - LLM: OpenAIAPI
+[2026-05-21 18:46:35] profile.py(252) :   - do_auto_trim: True
+[2026-05-21 18:46:35] profile.py(252) :   - debug_mode: True
+[2026-05-21 18:46:35] profile.py(252) :   - _model: openai/gpt-4o-mini
+[2026-05-21 18:46:35] profile.py(252) :   - _client: <openai.OpenAI object at 0x7fe61cf50980>
+[2026-05-21 18:46:35] profile.py(253) : ====================================================================
+[2026-05-21 18:46:35] profile.py(254) : Problem Parameters
+[2026-05-21 18:46:35] profile.py(255) : --------------------------------------------------------------------
+[2026-05-21 18:46:35] profile.py(256) :   - Problem: ProjectionEvaluation
+[2026-05-21 18:46:35] profile.py(259) :   - problem_type: tsp_logit_bias
+[2026-05-21 18:46:35] profile.py(259) :   - task_description: 
+                    I need help designing an inference-time additive logit-bias function for a POMO-style TSP decoder.
+                    The function is implemented in PyTorch and receives normalized full-graph coordinates, the current
+                    node of each POMO rollout, the visited-node mask, and the decoding step. It must return a tensor with
+                    shape (batch, pomo, problem) that will be added to decoder scores before tanh clipping and masking.
+                    Good solutions should use geometric information such as current-to-candidate distance, nearest-neighbor
+                    structure, decoding step, and problem size, while avoiding Python loops over the batch or rollout axes.
+                    The goal is to maximize final negative gap, so lower TSP tour gap is better.
+[2026-05-21 18:46:35] profile.py(259) :   - use_numba_accelerate: False
+[2026-05-21 18:46:35] profile.py(259) :   - use_protected_div: False
+[2026-05-21 18:46:35] profile.py(259) :   - protected_div_delta: 1e-05
+[2026-05-21 18:46:35] profile.py(259) :   - random_seed: None
+[2026-05-21 18:46:35] profile.py(259) :   - timeout_seconds: 180
+[2026-05-21 18:46:35] profile.py(259) :   - exec_code: True
+[2026-05-21 18:46:35] profile.py(259) :   - safe_evaluate: False
+[2026-05-21 18:46:35] profile.py(259) :   - daemon_eval_process: False
+[2026-05-21 18:46:35] profile.py(259) :   - fork_proc: auto
+[2026-05-21 18:46:35] profile.py(261) : ====================================================================
+[2026-05-21 18:46:35] profile.py(262) : Method Parameters
+[2026-05-21 18:46:35] profile.py(263) : --------------------------------------------------------------------
+[2026-05-21 18:46:35] profile.py(264) :   - Method: EoH
+[2026-05-21 18:46:35] profile.py(268) :   - _max_generations: 2
+[2026-05-21 18:46:35] profile.py(268) :   - _max_sample_nums: 4
+[2026-05-21 18:46:35] profile.py(268) :   - _pop_size: 2
+[2026-05-21 18:46:35] profile.py(268) :   - _selection_num: 2
+[2026-05-21 18:46:35] profile.py(268) :   - _use_e2_operator: True
+[2026-05-21 18:46:35] profile.py(268) :   - _use_m1_operator: True
+[2026-05-21 18:46:35] profile.py(268) :   - _use_m2_operator: True
+[2026-05-21 18:46:35] profile.py(268) :   - _num_samplers: 1
+[2026-05-21 18:46:35] profile.py(268) :   - _num_evaluators: 1
+[2026-05-21 18:46:35] profile.py(268) :   - _resume_mode: False
+[2026-05-21 18:46:35] profile.py(268) :   - _debug_mode: True
+[2026-05-21 18:46:35] profile.py(268) :   - _multi_thread_or_process_eval: thread
+[2026-05-21 18:46:35] profile.py(268) :   - _function_to_evolve_name: make_logit_bias
+[2026-05-21 18:46:35] profile.py(268) :   - _tot_sample_nums: 0
+[2026-05-21 18:46:35] profile.py(268) :   - _initial_sample_nums_max: 4
+[2026-05-21 18:46:35] profile.py(268) :   - _evaluation_executor: <concurrent.futures.thread.ThreadPoolExecutor object at 0x7fe61cf53b60>
+[2026-05-21 18:46:35] profile.py(270) : =====================================================================
+[2026-05-21 18:46:35] _base_client.py(1094) : Retrying request to /chat/completions in 0.437873 seconds
+[2026-05-21 18:46:36] _base_client.py(1094) : Retrying request to /chat/completions in 0.978162 seconds
